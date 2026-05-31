@@ -14,6 +14,20 @@ app.post('/create-order', async (req,res)=>{
     res.json(order);
   }catch(e){res.status(500).json({error:e.message})}
 });
+
+app.post('/refund-payment', async (req,res)=>{
+  try{
+    const paymentId = req.body.payment_id || req.body.paymentId;
+    if(!paymentId) return res.status(400).json({error:'Payment ID missing'});
+    const amount = Math.round(Number(req.body.amount || 0));
+    const payload = { notes: req.body.notes || {} };
+    // amount rupees me aaye to paise me convert. Amount empty ho to full refund.
+    if(amount > 0) payload.amount = amount * 100;
+    const refund = await razorpay.payments.refund(paymentId, payload);
+    res.json(refund);
+  }catch(e){res.status(500).json({error:e.message})}
+});
+
 app.post('/verify-payment', (req,res)=>{
   try{
     const {razorpay_order_id, razorpay_payment_id, razorpay_signature} = req.body;
