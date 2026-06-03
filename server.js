@@ -353,19 +353,33 @@ function buildNimbusPayload(orderId, order){
   }));
 
   // NimbusPost NEW docs: POST /v1/shipments.
-  // Important: LFH website already collects 20% advance online.
-  // For COD shipment, NimbusPost should collect ONLY remaining COD amount, not full order total.
-  const fullTotal = n(order.total,0) || (n(order.subtotal,0) + n(order.delivery,0)) || codAmount || 1;
-  const collectableAmount = codAmount > 0 ? codAmount : fullTotal;
+  // LFH website pe customer 20% advance already pay kar chuka hota hai.
+  // NimbusPost me ORDER TOTAL full bill value jayega, lekin COD/collectable amount
+  // sirf baaki rakam hogi: fullTotal - advancePaid.
+  const subTotal = n(order.subtotal,0);
+  const deliveryCharge = n(order.delivery,0);
+  const advancePaid = n(order.advance,0);
+  const fullTotal = Math.max(1, n(order.total,0) || (subTotal + deliveryCharge) || codAmount || 1);
+  const remainingCod = Math.max(0, codAmount || (fullTotal - advancePaid));
+  const collectableAmount = Math.min(fullTotal, remainingCod); // COD kabhi order total se zyada nahi hoga.
   return {
     order_number: safeText(order.orderId || orderId).slice(0,20),
-    // Delivery charge is already included in LFH COD balance calculation.
-    // Keeping these 0 avoids NimbusPost adding extra amount on label/collection.
+    // Delivery charge fullTotal me included hai. NimbusPost extra shipping/COD charge add na kare.
     shipping_charges: 0,
     discount: 0,
     cod_charges: 0,
-    payment_type: codAmount > 0 ? 'cod' : 'prepaid',
-    order_amount: collectableAmount,
+    payment_type: collectableAmount > 0 ? 'cod' : 'prepaid',
+    // Order total full bill value rahega; courier ko collect sirf collectable/COD amount karna hai.
+    order_amount: fullTotal,
+    total_amount: fullTotal,
+    sub_total: fullTotal,
+    cod_amount: collectableAmount,
+    collectable_amount: collectableAmount,
+    collectible_amount: collectableAmount,
+    cod_collectible_amount: collectableAmount,
+    cod_collectable_amount: collectableAmount,
+    amount_to_collect: collectableAmount,
+    advance_paid: advancePaid,
     package_weight: Math.round(totalWeight * 1000), // grams
     package_length: n(order.length,10)||10,
     package_breadth: n(order.breadth,10)||10,
