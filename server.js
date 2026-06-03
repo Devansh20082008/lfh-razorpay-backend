@@ -191,40 +191,43 @@ function buildVelocityPayload(orderId, order){
 }
 
 function nimbusEnvReady(){
+  // NimbusPost NEW API docs ke hisaab se login email + password chahiye.
   return !!(
-    (process.env.NIMBUSPOST_API_KEY || process.env.NIMBUSPOST_API_EMAIL || process.env.NIMBUSPOST_EMAIL || process.env.NIMBUSPOST_USERNAME) &&
-    (process.env.NIMBUSPOST_API_SECRET || process.env.NIMBUSPOST_SECRET_KEY || process.env.NIMBUSPOST_SECRET || process.env.NIMBUSPOST_PASSWORD)
+    (process.env.NIMBUSPOST_EMAIL || process.env.NIMBUSPOST_API_EMAIL || process.env.NIMBUSPOST_USERNAME) &&
+    (process.env.NIMBUSPOST_PASSWORD || process.env.NIMBUSPOST_API_PASSWORD || process.env.NIMBUSPOST_API_SECRET || process.env.NIMBUSPOST_SECRET_KEY || process.env.NIMBUSPOST_SECRET)
   );
 }
-function nimbusEmail(){ return process.env.NIMBUSPOST_API_EMAIL || process.env.NIMBUSPOST_EMAIL || process.env.NIMBUSPOST_USERNAME || process.env.NIMBUSPOST_API_KEY || ''; }
-function nimbusSecret(){ return process.env.NIMBUSPOST_API_SECRET || process.env.NIMBUSPOST_SECRET_KEY || process.env.NIMBUSPOST_SECRET || process.env.NIMBUSPOST_PASSWORD || ''; }
+function nimbusEmail(){
+  return process.env.NIMBUSPOST_EMAIL || process.env.NIMBUSPOST_API_EMAIL || process.env.NIMBUSPOST_USERNAME || '';
+}
+function nimbusPassword(){
+  return process.env.NIMBUSPOST_PASSWORD || process.env.NIMBUSPOST_API_PASSWORD || process.env.NIMBUSPOST_API_SECRET || process.env.NIMBUSPOST_SECRET_KEY || process.env.NIMBUSPOST_SECRET || '';
+}
+function extractNimbusToken(j){
+  return j?.token || j?.access_token || j?.data?.token || j?.data?.access_token || j?.data?.auth_token || j?.result?.token || j?.payload?.token;
+}
 async function nimbusLogin(){
-  if(!nimbusEnvReady()) throw new Error('NimbusPost API email/key or secret missing in Render Environment');
+  if(!nimbusEnvReady()) throw new Error('NimbusPost NEW API email/password missing. Render me NIMBUSPOST_EMAIL aur NIMBUSPOST_PASSWORD add karo.');
   if(nimbusToken && (Date.now()-nimbusTokenTime) < 6*60*60*1000) return nimbusToken;
   const email = nimbusEmail();
-  const secret = nimbusSecret();
-  const candidates = [
-    {path:'/v1/users/login', body:{email, password:secret}},
-    {path:'/v1/user/login', body:{email, password:secret}},
-    {path:'/v1/auth/login', body:{email, password:secret}},
-    {path:'/v1/login', body:{email, password:secret}},
-    {path:'/v1/oauth/token', body:{email, password:secret}},
-    {path:'/v1/auth-token', body:{email, password:secret}},
-    {path:'/v1/users/login', body:{api_key:process.env.NIMBUSPOST_API_KEY||email, secret_key:secret}},
-    {path:'/v1/login', body:{api_key:process.env.NIMBUSPOST_API_KEY||email, secret_key:secret}}
-  ];
-  let last = '';
-  for(const c of candidates){
-    try{
-      const r = await fetch(NIMBUSPOST_BASE + c.path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(c.body)});
-      const text = await r.text();
-      let j; try{ j = text ? JSON.parse(text) : {}; }catch(e){ j = {raw:text}; }
-      const token = j.token || j.access_token || j.data?.token || j.data?.access_token || j.result?.token || j.payload?.token;
-      if(r.ok && token){ nimbusToken = token; nimbusTokenTime = Date.now(); console.log('NimbusPost login success via', c.path); return nimbusToken; }
-      last = `${c.path}: HTTP ${r.status} ${JSON.stringify(j).slice(0,250)}`;
-    }catch(e){ last = `${c.path}: ${e.message}`; }
+  const password = nimbusPassword();
+
+  // NimbusPost NEW Partners API docs: POST https://api.nimbuspost.com/v1/users/login
+  const r = await fetch(NIMBUSPOST_BASE + '/v1/users/login', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ email, password })
+  });
+  const text = await r.text();
+  let j; try{ j = text ? JSON.parse(text) : {}; }catch(e){ j = {raw:text}; }
+  const token = extractNimbusToken(j);
+  if(!r.ok || !token){
+    throw new Error('/v1/users/login failed: HTTP '+r.status+' '+JSON.stringify(j).slice(0,300));
   }
-  throw new Error('NimbusPost login failed. Last response: ' + last);
+  nimbusToken = token;
+  nimbusTokenTime = Date.now();
+  console.log('NimbusPost login success via /v1/users/login');
+  return nimbusToken;
 }
 async function nimbusFetch(path, options={}){
   const token = await nimbusLogin();
@@ -234,7 +237,9 @@ async function nimbusFetch(path, options={}){
   });
   const text = await r.text();
   let j; try{ j = text ? JSON.parse(text) : {}; }catch(e){ j = {raw:text}; }
-  if(!r.ok) throw new Error(j.message || j.error || JSON.stringify(j).slice(0,300) || 'NimbusPost API error');
+  if(!r.ok || j.status === false){
+    throw new Error((j.message || j.error || JSON.stringify(j).slice(0,300) || 'NimbusPost API error') + ' [HTTP '+r.status+']');
+  }
   return j;
 }
 function mapNimbusRateResponse(j){
@@ -253,12 +258,22 @@ function mapNimbusRateResponse(j){
   return mapped;
 }
 async function nimbusPostRate({pickup, delivery, weight=0.5, length=10, breadth=10, height=4, cod=true}){
-  const payload = {pickup_postcode:String(pickup), delivery_postcode:String(delivery), cod:cod?1:0, weight:n(weight,0.5), length:n(length,10), breadth:n(breadth,10), height:n(height,4)};
-  const query = new URLSearchParams(payload).toString();
+  // NimbusPost NEW docs me separate live-rate endpoint clear nahi hai. Isliye fallback chal sakta hai.
+  // Agar NimbusPost rate endpoint active hua to ye common endpoints try karega.
+  const payload = {
+    pickup_postcode:String(pickup),
+    delivery_postcode:String(delivery),
+    payment_type: cod ? 'cod' : 'prepaid',
+    cod: cod?1:0,
+    package_weight: Math.round(n(weight,0.5)*1000),
+    package_length:n(length,10),
+    package_breadth:n(breadth,10),
+    package_height:n(height,4)
+  };
   const attempts = [
-    {path:'/v1/courier/serviceability?' + query, method:'GET'},
     {path:'/v1/courier/serviceability', method:'POST', body:JSON.stringify(payload)},
-    {path:'/v1/rate/calculate', method:'POST', body:JSON.stringify(payload)},
+    {path:'/v1/shipments/serviceability', method:'POST', body:JSON.stringify(payload)},
+    {path:'/v1/rates', method:'POST', body:JSON.stringify(payload)},
     {path:'/v1/shipments/rate', method:'POST', body:JSON.stringify(payload)}
   ];
   let last='';
@@ -282,48 +297,67 @@ function buildNimbusPayload(orderId, order){
   if(!phone) throw new Error('Customer mobile missing');
   if(!/^\d{6}$/.test(pincode)) throw new Error('Customer pincode missing/invalid');
   if(!items.length) throw new Error('Order items missing');
-  const orderItems = items.map((i,idx)=>({name:safeText(i.name,'LFH Product'), sku:safeText(i.id||i.sku||('LFH-SKU-'+(idx+1))), qty:Math.max(1,Math.round(n(i.qty,1))), price:n(i.price,0)||n(order.total,0)||1}));
+
+  const productLines = items.map((i,idx)=>({
+    name:safeText(i.name,'LFH Product'),
+    sku:safeText(i.id||i.sku||('LFH-SKU-'+(idx+1))).slice(0,50),
+    qty:Math.max(1,Math.round(n(i.qty,1))),
+    price:n(i.price,0)||n(order.subtotal,0)||1
+  }));
+
+  // NimbusPost NEW docs: POST /v1/shipments. order total automatically calculate nahi hota.
   return {
-    order_id: safeText(order.orderId || orderId),
-    order_number: safeText(order.orderId || orderId),
-    payment_method: codAmount > 0 ? 'COD' : 'prepaid',
-    cod_amount: codAmount,
-    amount: n(order.total,0) || n(order.subtotal,0) || codAmount || 1,
+    order_number: safeText(order.orderId || orderId).slice(0,20),
     shipping_charges: n(order.delivery,0),
-    pickup_postcode: process.env.NIMBUSPOST_PICKUP_PINCODE || process.env.SHIPROCKET_PICKUP_PINCODE || '481551',
-    weight: totalWeight,
-    length: n(order.length,10)||10,
-    breadth: n(order.breadth,10)||10,
-    height: n(order.height,4)||4,
-    customer_name: safeText(c.name,'Customer'),
-    customer_email: safeText(c.email,'customer@example.com'),
-    customer_phone: phone,
-    customer_address: safeText(c.address,'Lovely Fashion House Customer Address'),
-    customer_city: safeText(c.city,'Lamta'),
-    customer_state: safeText(c.state,'Madhya Pradesh'),
-    customer_pincode: pincode,
-    products: orderItems,
-    order_items: orderItems,
-    consignee: {name:safeText(c.name,'Customer'), mobile:phone, email:safeText(c.email,'customer@example.com'), address:safeText(c.address,'Lovely Fashion House Customer Address'), city:safeText(c.city,'Lamta'), state:safeText(c.state,'Madhya Pradesh'), pincode}
+    discount: 0,
+    cod_charges: codAmount > 0 ? n(order.delivery,0) : 0,
+    payment_type: codAmount > 0 ? 'cod' : 'prepaid',
+    order_amount: n(order.total,0) || n(order.subtotal,0) || codAmount || 1,
+    package_weight: Math.round(totalWeight * 1000), // grams
+    package_length: n(order.length,10)||10,
+    package_breadth: n(order.breadth,10)||10,
+    package_height: n(order.height,4)||4,
+    request_auto_pickup: 'Yes',
+    consignee: {
+      name: safeText(c.name,'Customer'),
+      address: safeText(c.address,'Lovely Fashion House Customer Address'),
+      address_2: safeText(c.address2||''),
+      city: safeText(c.city,'Lamta'),
+      state: safeText(c.state,'Madhya Pradesh'),
+      pincode,
+      phone,
+      email: safeText(c.email,'customer@example.com')
+    },
+    pickup: {
+      warehouse_name: process.env.NIMBUSPOST_PICKUP_LOCATION || 'Lovely Fashion House',
+      name: 'Lovely Fashion House',
+      address: process.env.NIMBUSPOST_PICKUP_ADDRESS || 'Bazaar Chowk Sabha Manch ke piche Ward No 08 Lamta',
+      city: process.env.NIMBUSPOST_PICKUP_CITY || 'Lamta',
+      state: process.env.NIMBUSPOST_PICKUP_STATE || 'Madhya Pradesh',
+      pincode: process.env.NIMBUSPOST_PICKUP_PINCODE || '481551',
+      phone: process.env.NIMBUSPOST_PICKUP_PHONE || '7049461974',
+      email: process.env.NIMBUSPOST_EMAIL || process.env.NIMBUSPOST_API_EMAIL || 'thedevansh09@gmail.com'
+    },
+    products: productLines.map(x=>({ name:x.name, sku:x.sku, qty:x.qty, price:x.price })),
+    order_items: productLines.map(x=>({ name:x.name, sku:x.sku, units:x.qty, selling_price:x.price }))
+  };
+}
+function extractNimbusShipment(j){
+  const d = j?.data || j?.payload || j?.result || j || {};
+  return {
+    order_id: d.order_id || d.orderId || d.id || d.order_number || '',
+    shipment_id: d.shipment_id || d.shipmentId || '',
+    awb_number: d.awb_number || d.awb || d.awb_code || d.awbNumber || '',
+    courier_id: d.courier_id || d.courier_company_id || '',
+    courier_name: d.courier_name || d.courier || '',
+    label_url: d.label_url || d.label || '',
+    raw: j
   };
 }
 async function nimbusCreateOrder(orderId, order){
   const payload = buildNimbusPayload(orderId, order);
-  const attempts = [
-    {path:'/v1/shipments', body:payload},
-    {path:'/v1/shipments/create', body:payload},
-    {path:'/v1/orders', body:payload},
-    {path:'/v1/orders/create', body:payload},
-    {path:'/v1/shipments/create', body:{shipments:[payload]}}
-  ];
-  let last='';
-  for(const a of attempts){
-    try{
-      const j = await nimbusFetch(a.path, {method:'POST', body:JSON.stringify(a.body)});
-      return {success:true, payload, nimbuspost:j, usedEndpoint:a.path};
-    }catch(e){ last = a.path + ': ' + e.message; }
-  }
-  throw new Error('NimbusPost order create failed. ' + last);
+  const j = await nimbusFetch('/v1/shipments', {method:'POST', body:JSON.stringify(payload)});
+  return {success:true, payload, nimbuspost:j, shipment:extractNimbusShipment(j), usedEndpoint:'/v1/shipments'};
 }
 
 
