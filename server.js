@@ -356,16 +356,23 @@ function buildNimbusPayload(orderId, order){
   // LFH website pe customer 20% advance already pay kar chuka hota hai.
   // NimbusPost me ORDER TOTAL full bill value jayega, lekin COD/collectable amount
   // sirf baaki rakam hogi: fullTotal - advancePaid.
-  const subTotal = n(order.subtotal,0);
-  const deliveryCharge = n(order.delivery,0);
-  const advancePaid = n(order.advance,0);
-  const fullTotal = Math.max(1, n(order.total,0) || (subTotal + deliveryCharge) || codAmount || 1);
-  const remainingCod = Math.max(0, codAmount || (fullTotal - advancePaid));
+  // Permanent fix: NimbusPost dashboard order total item prices + shipping_charges se banata hai.
+  // Isliye delivery charge ko 0 mat bhejo, warna order total sirf product price rahega
+  // aur COD/collectable amount product price se zyada hote hi Nimbus order cancel ho jayega.
+  const itemSubTotal = productLines.reduce((s,x)=>s + (n(x.price,0) * n(x.qty,1)), 0);
+  const subTotal = n(order.subtotal,0) || itemSubTotal || 0;
+  const savedDelivery = n(order.delivery,0) || n(order.shipping,0) || n(order.shippingCharge,0) || n(order.deliveryCharge,0);
+  const savedTotal = n(order.total,0) || n(order.orderTotal,0) || n(order.grandTotal,0);
+  const fullTotal = Math.max(1, savedTotal || (subTotal + savedDelivery) || codAmount || 1);
+  const deliveryCharge = Math.max(0, savedDelivery || (fullTotal - subTotal));
+  const advancePaid = n(order.advance,0) || n(order.advancePaid,0) || n(order.paidAmount,0);
+  const calculatedCod = Math.max(0, fullTotal - advancePaid);
+  const remainingCod = Math.max(0, codAmount || calculatedCod);
   const collectableAmount = Math.min(fullTotal, remainingCod); // COD kabhi order total se zyada nahi hoga.
   return {
     order_number: safeText(order.orderId || orderId).slice(0,20),
-    // Delivery charge fullTotal me included hai. NimbusPost extra shipping/COD charge add na kare.
-    shipping_charges: 0,
+    // NimbusPost me shipping_charges alag bhejna zaroori hai, tabhi Order Total = Product + Delivery banega.
+    shipping_charges: deliveryCharge,
     discount: 0,
     cod_charges: 0,
     payment_type: collectableAmount > 0 ? 'cod' : 'prepaid',
