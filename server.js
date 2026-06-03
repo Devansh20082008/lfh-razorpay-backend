@@ -262,36 +262,78 @@ function mapNimbusRateResponse(j){
   if(!mapped.length && rate>0) mapped.push({courier_name:'NimbusPost', rate, freight_charge:rate, cod_charges:0});
   return mapped;
 }
-async function nimbusPostRate({pickup, delivery, weight=0.5, length=10, breadth=10, height=4, cod=true}){
-  // NimbusPost NEW docs me separate live-rate endpoint clear nahi hai. Isliye fallback chal sakta hai.
-  // Agar NimbusPost rate endpoint active hua to ye common endpoints try karega.
-  const payload = {
-    pickup_postcode:String(pickup),
-    delivery_postcode:String(delivery),
-    payment_type: cod ? 'cod' : 'prepaid',
-    cod: cod?1:0,
-    package_weight: Math.round(n(weight,0.5)*1000),
-    package_length:n(length,10),
-    package_breadth:n(breadth,10),
-    package_height:n(height,4)
-  };
-  const attempts = [
-    {path:'/v1/courier/serviceability', method:'POST', body:JSON.stringify(payload)},
-    {path:'/v1/shipments/serviceability', method:'POST', body:JSON.stringify(payload)},
-    {path:'/v1/rates', method:'POST', body:JSON.stringify(payload)},
-    {path:'/v1/shipments/rate', method:'POST', body:JSON.stringify(payload)}
-  ];
-  let last='';
-  for(const a of attempts){
-    try{
-      const j = await nimbusFetch(a.path, {method:a.method, body:a.body});
-      const mapped = mapNimbusRateResponse(j);
-      if(mapped.length){ return {success:true, provider:'NimbusPost', pickup_pincode:String(pickup), delivery_pincode:String(delivery), weight, length, breadth, height, cod:!!cod, best:mapped[0], couriers:mapped.slice(0,8), raw:j}; }
-      last = a.path + ': no rate found ' + JSON.stringify(j).slice(0,200);
-    }catch(e){ last = a.path + ': ' + e.message; }
-  }
-  throw new Error('NimbusPost rate failed. ' + last);
+function nimbusZoneForPincode(pin, pickup='481551'){
+  pin = String(pin || '').trim();
+  pickup = String(pickup || '481551').trim();
+  if(!/^\d{6}$/.test(pin)) return 'B';
+  const p2 = pin.slice(0,2), p3 = pin.slice(0,3);
+  const pick2 = pickup.slice(0,2), pick3 = pickup.slice(0,3);
+  // Zone A: same/local pincode area
+  if(pin === pickup || p3 === pick3 || pin.startsWith('481')) return 'A';
+  // Zone B: same state MP broad pincode belt
+  if(['45','46','47','48'].includes(p2)) return 'B';
+  // Zone E: remote/NE/J&K/Andaman style areas
+  if(['19','74','79','78','73','76'].includes(p2)) return 'E';
+  // Zone C: nearby/major reachable zones from MP (UP/Delhi/MH/CG/GJ/RJ etc.)
+  if(['11','12','13','14','15','16','17','18','20','21','22','23','24','25','26','27','28','30','31','32','33','34','36','37','38','39','40','41','42','43','44','49'].includes(p2)) return 'C';
+  // Zone D: rest of India default
+  return 'D';
 }
+
+function nimbusChartSlabRate(zone, billableWeight){
+  const slabs = [
+    {max:0.5, label:'0.50 kg', rates:{A:40.89,B:49.56,C:58.23,D:59.47,E:91.69}},
+    {max:1, label:'1 kg', rates:{A:77.18,B:80.85,C:96.60,D:110.25,E:153.30}},
+    {max:5, label:'5 kg', rates:{A:176.99,B:187.17,C:200.41,D:224.86,E:262.54}},
+    {max:10, label:'10 kg', rates:{A:247.26,B:302.26,C:346.06,D:395.97,E:493.74}},
+    {max:20, label:'20 kg', rates:{A:525.00,B:651.00,C:749.70,D:871.50,E:1050.00}}
+  ];
+  const w = Math.max(0.5, Number(billableWeight || 0.5));
+  const z = ['A','B','C','D','E'].includes(zone) ? zone : 'D';
+  const slab = slabs.find(x => w <= x.max);
+  if(slab) return {rate:slab.rates[z], slab:slab.label};
+  // Above 20kg: add proportionally by 20kg blocks and final slab.
+  const base20 = slabs[4].rates[z];
+  const full = Math.floor(w / 20);
+  const rem = w - full * 20;
+  let total = full * base20;
+  let remLabel = '';
+  if(rem > 0){
+    const r = nimbusChartSlabRate(z, rem);
+    total += r.rate;
+    remLabel = ' + ' + r.slab;
+  }
+  return {rate:total, slab:(full ? (full+'×20 kg') : '') + remLabel};
+}
+
+function nimbusChartRate({pickup='481551', delivery, weight=0.5, length=10, breadth=10, height=4, cod=true}){
+  const actualWeight = Math.max(0.1, n(weight,0.5));
+  const volumetricWeight = Math.max(0, (n(length,10) * n(breadth,10) * n(height,4)) / 5000);
+  const billableWeight = Math.max(actualWeight, volumetricWeight, 0.5);
+  const zone = nimbusZoneForPincode(delivery, pickup);
+  const calc = nimbusChartSlabRate(zone, billableWeight);
+  const rate = Math.ceil(calc.rate);
+  const best = {
+    courier_company_id:'NIMBUS-CHART',
+    courier_name:'NimbusPost Delhivery Surface '+calc.slab+' chart',
+    rate,
+    freight_charge:rate,
+    cod_charges:0,
+    zone:'Zone '+zone,
+    billable_weight:Number(billableWeight.toFixed(2)),
+    actual_weight:Number(actualWeight.toFixed(2)),
+    volumetric_weight:Number(volumetricWeight.toFixed(2))
+  };
+  return {success:true, provider:'NimbusPost Chart', pickup_pincode:String(pickup), delivery_pincode:String(delivery), weight:actualWeight, length:n(length,10), breadth:n(breadth,10), height:n(height,4), cod:!!cod, zone:'Zone '+zone, best, couriers:[best], note:'NimbusPost chart based delivery charge'};
+}
+
+async function nimbusPostRate({pickup, delivery, weight=0.5, length=10, breadth=10, height=4, cod=true}){
+  // NimbusPost NEW docs me separate live-rate endpoint nahi diya hai.
+  // Isliye user ke NimbusPost rate chart ke hisaab se local calculator use hota hai.
+  // Order create ke liye real NimbusPost API alag route se kaam karta rahega.
+  return nimbusChartRate({pickup, delivery, weight, length, breadth, height, cod});
+}
+
 function buildNimbusPayload(orderId, order){
   const c = order.customer || {};
   const items = Array.isArray(order.items) ? order.items : [];
