@@ -322,7 +322,7 @@ function buildNimbusPayload(orderId, order){
     package_length: n(order.length,10)||10,
     package_breadth: n(order.breadth,10)||10,
     package_height: n(order.height,4)||4,
-    request_auto_pickup: 'Yes',
+    request_auto_pickup: 'yes',
     consignee: {
       name: safeText(c.name,'Customer'),
       address: safeText(c.address,'Lovely Fashion House Customer Address'),
