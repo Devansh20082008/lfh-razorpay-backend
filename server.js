@@ -204,7 +204,12 @@ function nimbusPassword(){
   return process.env.NIMBUSPOST_PASSWORD || process.env.NIMBUSPOST_API_PASSWORD || process.env.NIMBUSPOST_API_SECRET || process.env.NIMBUSPOST_SECRET_KEY || process.env.NIMBUSPOST_SECRET || '';
 }
 function extractNimbusToken(j){
-  return j?.token || j?.access_token || j?.data?.token || j?.data?.access_token || j?.data?.auth_token || j?.result?.token || j?.payload?.token;
+  // NimbusPost NEW API login response normally aisa hota hai:
+  // { "status": true, "data": "<JWT_TOKEN>" }
+  if(typeof j?.data === 'string') return j.data;
+  if(typeof j?.token === 'string') return j.token;
+  if(typeof j?.access_token === 'string') return j.access_token;
+  return j?.data?.token || j?.data?.access_token || j?.data?.auth_token || j?.result?.token || j?.payload?.token;
 }
 async function nimbusLogin(){
   if(!nimbusEnvReady()) throw new Error('NimbusPost NEW API email/password missing. Render me NIMBUSPOST_EMAIL aur NIMBUSPOST_PASSWORD add karo.');
