@@ -352,14 +352,20 @@ function buildNimbusPayload(orderId, order){
     price:n(i.price,0)||n(order.subtotal,0)||1
   }));
 
-  // NimbusPost NEW docs: POST /v1/shipments. order total automatically calculate nahi hota.
+  // NimbusPost NEW docs: POST /v1/shipments.
+  // Important: LFH website already collects 20% advance online.
+  // For COD shipment, NimbusPost should collect ONLY remaining COD amount, not full order total.
+  const fullTotal = n(order.total,0) || (n(order.subtotal,0) + n(order.delivery,0)) || codAmount || 1;
+  const collectableAmount = codAmount > 0 ? codAmount : fullTotal;
   return {
     order_number: safeText(order.orderId || orderId).slice(0,20),
-    shipping_charges: n(order.delivery,0),
+    // Delivery charge is already included in LFH COD balance calculation.
+    // Keeping these 0 avoids NimbusPost adding extra amount on label/collection.
+    shipping_charges: 0,
     discount: 0,
-    cod_charges: codAmount > 0 ? n(order.delivery,0) : 0,
+    cod_charges: 0,
     payment_type: codAmount > 0 ? 'cod' : 'prepaid',
-    order_amount: n(order.total,0) || n(order.subtotal,0) || codAmount || 1,
+    order_amount: collectableAmount,
     package_weight: Math.round(totalWeight * 1000), // grams
     package_length: n(order.length,10)||10,
     package_breadth: n(order.breadth,10)||10,
