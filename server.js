@@ -343,8 +343,20 @@ function buildNimbusPayload(orderId, order){
       phone: process.env.NIMBUSPOST_PICKUP_PHONE || '7049461974',
       email: process.env.NIMBUSPOST_EMAIL || process.env.NIMBUSPOST_API_EMAIL || 'thedevansh09@gmail.com'
     },
-    products: productLines.map(x=>({ name:x.name, sku:x.sku, qty:x.qty, price:x.price })),
-    order_items: productLines.map(x=>({ name:x.name, sku:x.sku, units:x.qty, selling_price:x.price }))
+    // NimbusPost validation me item qty required aata hai, isliye common aliases bhi bhej rahe hain.
+    item_name: productLines[0]?.name || 'LFH Product',
+    item_sku: productLines[0]?.sku || 'LFH-SKU-1',
+    item_qty: productLines[0]?.qty || 1,
+    item_price: productLines[0]?.price || 1,
+    products: productLines.map(x=>({
+      name:x.name, sku:x.sku, qty:x.qty, quantity:x.qty, item_qty:x.qty, price:x.price, selling_price:x.price, item_price:x.price
+    })),
+    items: productLines.map(x=>({
+      name:x.name, sku:x.sku, qty:x.qty, quantity:x.qty, item_qty:x.qty, price:x.price, selling_price:x.price, item_price:x.price
+    })),
+    order_items: productLines.map(x=>({
+      name:x.name, sku:x.sku, units:x.qty, qty:x.qty, quantity:x.qty, item_qty:x.qty, selling_price:x.price, price:x.price, item_price:x.price
+    }))
   };
 }
 function extractNimbusShipment(j){
